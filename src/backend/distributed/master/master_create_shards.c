@@ -115,6 +115,7 @@ isolate_tenant_to_new_shard(PG_FUNCTION_ARGS)
 	Oid tenantIdDataType = get_fn_expr_argtype(fcinfo->flinfo, 1);
 	ShardInterval *shardInterval = NULL;
 	FmgrInfo *hashFunction = NULL;
+	Datum hashedValueDatum = 0;
 	int hashedValue = 0;
 	char *hashFunctionName = NULL;
 
@@ -127,7 +128,8 @@ isolate_tenant_to_new_shard(PG_FUNCTION_ARGS)
 	cacheEntry = DistributedTableCacheEntry(relationId);
 	hashFunction = cacheEntry->hashFunction;
 	hashFunctionName = get_func_name(hashFunction->fn_oid);
-	hashedValue = DatumGetInt32(FunctionCall1(hashFunction, tenantIdDatum));
+	hashedValueDatum = FunctionCall1(hashFunction, tenantIdDatum);
+	hashedValue = DatumGetInt32(hashedValueDatum);
 
 	isolatedShardId = SplitShardForTenant(shardInterval, hashFunctionName, hashedValue);
 
@@ -163,7 +165,7 @@ SplitShardForTenant(ShardInterval *oldShardInterval, char *hashFunctionName,
 	foreach(colocatedTableCell, colocatedTableList)
 	{
 		Oid colocatedTableId = lfirst_oid(colocatedTableCell);
-		char relationKind = '\0';
+		char relationKind = 0;
 
 		/* check that user has owner rights in all co-located tables */
 		EnsureTableOwner(colocatedTableId);
@@ -187,10 +189,6 @@ SplitShardForTenant(ShardInterval *oldShardInterval, char *hashFunctionName,
 		ShardInterval *colocatedShard = (ShardInterval *) lfirst(colocatedShardCell);
 		uint64 colocatedShardId = colocatedShard->shardId;
 
-		/*
-		 * We plan to move the placement to the healthy state, so we need to grab a
-		 * shard metadata lock (in exclusive mode).
-		 */
 		LockShardDistributionMetadata(colocatedShardId, ExclusiveLock);
 	}
 
@@ -204,8 +202,10 @@ SplitShardForTenant(ShardInterval *oldShardInterval, char *hashFunctionName,
 	/* create new shards in a seperate transaction */
 	CreateNewShards(nodeConnectionInfoList, newShardCommandList);
 
+	/* add new metadata*/
 	CreateNewMetadata(newShardIntervalList, nodeConnectionInfoList);
 
+	/* update shard count of the colocation group  */
 	oldShardCount = ColocationGroupShardCount(colocationId);
 	shardCountDifference =
 		(list_length(newShardIntervalList) / list_length(colocatedShardList)) - 1;

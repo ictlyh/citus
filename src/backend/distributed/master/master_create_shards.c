@@ -142,17 +142,55 @@ SplitShardForTenant(ShardInterval *oldShardInterval, char *hashFunctionName,
 	/* XXX: is it safe to use directly hashed value */
 	int isolatedShardIndex = 0;
 	ShardInterval *isolatedShardInterval = NULL;
-	List *cachedColocatedShardIntervalList = NIL;
-	List *colocatedShardIntervalList = NIL;
+	List *cachedColocatedShardList = NIL;
+	List *colocatedShardList = NIL;
+	List *colocatedTableList = NIL;
 	List *newShardIntervalList = NIL;
 	List *newShardCommandList = NIL;
 	List *nodeConnectionInfoList = NIL;
+	ListCell *colocatedTableCell = NULL;
+	ListCell *colocatedShardCell = NULL;
 
-	cachedColocatedShardIntervalList = ColocatedShardIntervalList(oldShardInterval);
-	colocatedShardIntervalList = CopyShardIntervalList(cachedColocatedShardIntervalList);
+	cachedColocatedShardList = ColocatedShardIntervalList(oldShardInterval);
+	colocatedShardList = CopyShardIntervalList(cachedColocatedShardList);
+
+	colocatedTableList = ColocatedTableList(oldShardInterval->relationId);
+	foreach(colocatedTableCell, colocatedTableList)
+	{
+		Oid colocatedTableId = lfirst_oid(colocatedTableCell);
+		char relationKind = '\0';
+
+		/* check that user has owner rights in all co-located tables */
+		EnsureTableOwner(colocatedTableId);
+
+		relationKind = get_rel_relkind(colocatedTableId);
+		if (relationKind == RELKIND_FOREIGN_TABLE)
+		{
+			char *relationName = get_rel_name(colocatedTableId);
+			ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							errmsg("cannot isolate tenant"),
+							errdetail("Table %s is a foreign table. Isolating "
+									  "shards backed by foreign tables is "
+									  "not supported.", relationName)));
+		}
+	}
+
+	/* we sort colocatedShardList so that lock operations will not cause any deadlocks */
+	colocatedShardList = SortList(colocatedShardList, CompareShardIntervalsById);
+	foreach(colocatedShardCell, colocatedShardList)
+	{
+		ShardInterval *colocatedShard = (ShardInterval *) lfirst(colocatedShardCell);
+		uint64 colocatedShardId = colocatedShard->shardId;
+
+		/*
+		 * We plan to move the placement to the healthy state, so we need to grab a
+		 * shard metadata lock (in exclusive mode).
+		 */
+		LockShardDistributionMetadata(colocatedShardId, ExclusiveLock);
+	}
 
 	newShardIntervalList = NewShardIntervalList(oldShardInterval, hashedValue);
-	newShardCommandList = NewShardCommandList(colocatedShardIntervalList,
+	newShardCommandList = NewShardCommandList(colocatedShardList,
 											  newShardIntervalList,
 											  hashFunctionName);
 
@@ -164,7 +202,7 @@ SplitShardForTenant(ShardInterval *oldShardInterval, char *hashFunctionName,
 	CreateNewMetadata(newShardIntervalList, nodeConnectionInfoList);
 
 	/* drop old shards and delete related metadata */
-	DropOldShards(colocatedShardIntervalList, nodeConnectionInfoList);
+	DropOldShards(colocatedShardList, nodeConnectionInfoList);
 
 	CitusInvalidateRelcacheByRelid(DistShardRelationId());
 

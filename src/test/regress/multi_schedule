@@ -210,3 +210,5 @@ test: multi_foreign_key
 # multi_upgrade_reference_table tests for upgrade_reference_table UDF
 # ----------
 test: multi_upgrade_reference_table
+
+test: multi_tenant_isolation

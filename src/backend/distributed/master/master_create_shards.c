@@ -140,6 +140,11 @@ SplitShardForTenant(ShardInterval *oldShardInterval, char *hashFunctionName,
 					int hashedValue)
 {
 	/* XXX: is it safe to use directly hashed value */
+	Oid relationId = oldShardInterval->relationId;
+	int colocationId = TableColocationId(relationId);
+	int oldShardCount = 0;
+	int newShardCount = 0;
+	int shardCountDifference = 0;
 	int isolatedShardIndex = 0;
 	ShardInterval *isolatedShardInterval = NULL;
 	List *cachedColocatedShardList = NIL;
@@ -154,7 +159,7 @@ SplitShardForTenant(ShardInterval *oldShardInterval, char *hashFunctionName,
 	cachedColocatedShardList = ColocatedShardIntervalList(oldShardInterval);
 	colocatedShardList = CopyShardIntervalList(cachedColocatedShardList);
 
-	colocatedTableList = ColocatedTableList(oldShardInterval->relationId);
+	colocatedTableList = ColocatedTableList(relationId);
 	foreach(colocatedTableCell, colocatedTableList)
 	{
 		Oid colocatedTableId = lfirst_oid(colocatedTableCell);
@@ -200,6 +205,13 @@ SplitShardForTenant(ShardInterval *oldShardInterval, char *hashFunctionName,
 	CreateNewShards(nodeConnectionInfoList, newShardCommandList);
 
 	CreateNewMetadata(newShardIntervalList, nodeConnectionInfoList);
+
+	oldShardCount = ColocationGroupShardCount(colocationId);
+	shardCountDifference =
+		(list_length(newShardIntervalList) / list_length(colocatedShardList)) - 1;
+	newShardCount = oldShardCount + shardCountDifference;
+
+	UpdateColocationGroupShardCount(colocationId, newShardCount);
 
 	/* drop old shards and delete related metadata */
 	DropOldShards(colocatedShardList, nodeConnectionInfoList);

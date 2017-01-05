@@ -2,14 +2,11 @@
 
 SET search_path = 'pg_catalog';
 
-DROP FUNCTION IF EXISTS master_remove_node(nodename text, nodeport integer);
-
-CREATE FUNCTION master_remove_node(nodename text, nodeport integer,
-								   force bool DEFAULT false)
+CREATE FUNCTION master_disable_node(nodename text, nodeport integer)
 	RETURNS void
 	LANGUAGE C STRICT
-	AS 'MODULE_PATHNAME', $$master_remove_node$$;
-COMMENT ON FUNCTION master_remove_node(nodename text, nodeport integer, force bool)
-	IS 'remove node from the cluster';
+	AS 'MODULE_PATHNAME', $$master_disable_node$$;
+COMMENT ON FUNCTION master_disable_node(nodename text, nodeport integer)
+	IS 'removes node from the cluster temporarily';
     
 RESET search_path;

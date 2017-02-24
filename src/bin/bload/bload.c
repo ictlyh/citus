@@ -123,13 +123,16 @@ main(int argc, char *argv[])
 		}
 		if (items[0].revents & ZMQ_POLLIN) /* receive a message */
 		{
-			nbytes = zmq_recv(receiver, buf, buffer_size - 1, 0);
-			if (nbytes == -1)
+			do
 			{
-				fprintf(fp, "zmq_recv() error(%d): %s\n", errno, strerror(errno));
-				fflush(fp);
-				break;
-			}
+				nbytes = zmq_recv(receiver, buf, buffer_size - 1, 0);
+				if (nbytes == -1)
+				{
+					fprintf(fp, "zmq_recv() error(%d): %s\n", errno, strerror(errno));
+					fflush(fp);
+				}
+			} while (nbytes == -1 && errno == EINTR);
+			if (nbytes == -1) break;
 			fwrite(buf, 1, nbytes, stdout);
 			fflush(stdout);
 		}
@@ -155,13 +158,16 @@ main(int argc, char *argv[])
 				}
 				if (items[0].revents & ZMQ_POLLIN) /* receive a message */
 				{
-					nbytes = zmq_recv(receiver, buf, buffer_size - 1, 0);
-					if (nbytes == -1)
+					do
 					{
-						fprintf(fp, "zmq_recv() error(%d): %s\n", errno, strerror(errno));
-						fflush(fp);
-						break;
-					}
+						nbytes = zmq_recv(receiver, buf, buffer_size - 1, 0);
+						if (nbytes == -1)
+						{
+							fprintf(fp, "zmq_recv() error(%d): %s\n", errno, strerror(errno));
+							fflush(fp);
+						}
+					} while (nbytes == -1 && errno == EINTR);
+					if (nbytes == -1) break;
 					fwrite(buf, 1, nbytes, stdout);
 					fflush(stdout);
 				}

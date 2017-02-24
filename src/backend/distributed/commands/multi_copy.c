@@ -2072,41 +2072,46 @@ BulkloadCopyServer(CopyStmt *copyStatement, char *completionTag,
 	PG_TRY();
 	{
 		int natts = CopyGetAttnums(relationId, copyStatement->attlist);
-
 		/*
-		 * check status of workers before starting zeromq server in case
-		 * of unproper bulkload copy command.
-		 * TODO@luoyuanhao: if error occurs after EpollTimeOut, there's
-		 * still possibility of deadlock, refactoring this code properly.
+		 * TODO@luoyuanhao: check status of workers before starting zeromq server
+		 * in case of improper bulkload copy command.
+		 * code below doesn't work as expectedly.
 		 */
-		do {
-			nevents = epoll_wait(efd, events, MaxEvents, EpollTimeout * 10);
-			if (nevents == -1)
-			{
-				elog(ERROR, "epoll_wait error(%d): %s", errno, strerror(errno));
-			}
-			for (loopIndex = 0; loopIndex < nevents; loopIndex++)
-			{
-				conn = GetConnectionBySock(workerConnectionList,
-										   events[loopIndex].data.fd,
-										   &connIdx);
-				Assert(conn != NULL);
-				if (finish[connIdx] != 0)
-				{
-					continue;
-				}
-
-				/*
-				 * if bulkload copy command is okay, there should be neither output nor error
-				 * message in socket, otherwise, bulkload copy command is wrong.
-				 */
-				elog(WARNING,
-					 "bulkload copy in %s:%s fail, read log file to get error message",
-					 PQhost(conn), PQport(conn));
-				finish[connIdx] = -1;
-				finishCount++;
-			}
-		} while (nevents != 0);
+		// do
+		// {
+		// 	nevents = epoll_wait(efd, events, MaxEvents, EpollTimeout * 10);
+		// 	if (nevents == -1)
+		// 	{
+		// 		elog(ERROR, "epoll_wait error(%d): %s", errno, strerror(errno));
+		// 	}
+		// 	for (loopIndex = 0; loopIndex  < nevents; loopIndex++)
+		// 	{
+		// 		conn = GetConnectionBySock(workerConnectionList, events[loopIndex].data.fd,
+		// 				&connIdx);
+		// 		Assert(conn != NULL);
+		// 		if (finish[connIdx] != 0) continue;
+		// 		if (!PQconsumeInput(conn))
+		// 		{
+		// 			elog(WARNING, "copy command fails in %s:%s: %s", PQhost(conn), PQport(conn),
+		// 					PQerrorMessage(conn));
+		// 			finish[connIdx] = -1;
+		// 			finishCount++;
+		// 		}
+		// 		else if (!PQisBusy(conn))
+		// 		{
+		// 			res = PQgetResult(conn);
+		// 			if (res != NULL && PQresultStatus(res) != PGRES_COMMAND_OK &&
+		// 					PQresultStatus(res) != PGRES_COPY_IN)
+		// 			{
+		// 				elog(WARNING, "copy command fails in %s:%s: %s", PQhost(conn), PQport(conn),
+		// 						PQresultErrorMessage(res));
+		// 				finish[connIdx] = -1;
+		// 				finishCount++;
+		// 			}
+		// 			if (res != NULL) PQclear(res);
+		// 		}
+		// 	}
+		// } while(nevents != 0);
 		if (finishCount == workerConnectionCount)
 		{
 			elog(ERROR, "bulkload copy commands fail in all workers");
@@ -3041,18 +3046,21 @@ static void
 SendMessage(ZeroMQServer *zeromqServer, char *buf, size_t len, bool kill)
 {
 	int rc;
-	if (kill)
+	do
 	{
-		rc = zmq_send(zeromqServer->controller, buf, len, 0);
-	}
-	else
-	{
-		rc = zmq_send(zeromqServer->sender, buf, len, 0);
-	}
-	if (rc != len)
-	{
-		elog(LOG, "zmq_send() error(%d): %s", errno, zmq_strerror(errno));
-	}
+		if (kill)
+		{
+			rc = zmq_send(zeromqServer->controller, buf, len, 0);
+		}
+		else
+		{
+			rc = zmq_send(zeromqServer->sender, buf, len, 0);
+		}
+		if (rc != len)
+		{
+			elog(LOG, "zmq_send() error(%d): %s", errno, zmq_strerror(errno));
+		}
+	} while (rc == -1 && errno == EINTR);
 }
 
 

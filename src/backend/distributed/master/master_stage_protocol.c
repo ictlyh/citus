@@ -57,6 +57,8 @@ static bool WorkerShardStats(ShardPlacement *placement, Oid relationId,
 PG_FUNCTION_INFO_V1(master_create_empty_shard);
 PG_FUNCTION_INFO_V1(master_append_table_to_shard);
 PG_FUNCTION_INFO_V1(master_update_shard_statistics);
+PG_FUNCTION_INFO_V1(master_get_shard_count);
+PG_FUNCTION_INFO_V1(master_get_shard_replication_factor);
 
 
 /*
@@ -317,6 +319,28 @@ master_update_shard_statistics(PG_FUNCTION_ARGS)
 	shardSize = UpdateShardStatistics(shardId);
 
 	PG_RETURN_INT64(shardSize);
+}
+
+/*
+ * master_get_shard_count gets the shard interval count of the table.
+ */
+Datum
+master_get_shard_count(PG_FUNCTION_ARGS)
+{
+	Oid relationId = PG_GETARG_OID(0);
+	int shardCount = ShardIntervalCount(relationId);
+	PG_RETURN_INT32(shardCount);
+}
+
+/*
+ * master_get_shard_replication_factor gets the shard replication factor of the table.
+ */
+Datum
+master_get_shard_replication_factor(PG_FUNCTION_ARGS)
+{
+	Oid relationId = PG_GETARG_OID(0);
+	int shardReplicationFactor = TableShardReplicationFactor(relationId);
+	PG_RETURN_INT32(shardReplicationFactor);
 }
 
 

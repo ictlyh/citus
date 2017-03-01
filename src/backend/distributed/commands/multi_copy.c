@@ -156,6 +156,7 @@ static StringInfo ConstructBulkloadCopyStmt(CopyStmt *copyStatement,
 											char *nodeName, uint32 nodePort);
 static void RebuildBulkloadCopyStatement(CopyStmt *copyStatement,
 										 NodeAddress *bulkloadServer);
+static Oid MasterRelationId(char *qualifiedName);
 static StringInfo DeparseCopyStatementOptions(List *options);
 
 static NodeAddress * LocalAddress(void);
@@ -171,6 +172,13 @@ static void BulkloadCopyServer(CopyStmt *copyStatement, char *completionTag,
 static List * MasterWorkerNodeList(void);
 static List * RemoteWorkerNodeList(void);
 static DistTableCacheEntry * MasterDistributedTableCacheEntry(RangeVar *relation);
+
+static int32 MasterShardIntervalCount(RangeVar *relation);
+static int32 RemoteShardIntervalCount(Oid relationId);
+static int32 MasterShardReplicationFactor(RangeVar *relation);
+static int32 RemoteShardReplicationFactor(Oid relationId);
+
+static int32 CalculateDynamicConcurrentDegree(int workerNumber, RangeVar *relation);
 
 static void StartZeroMQServer(ZeroMQServer *zeromqServer, bool is_program, bool binary,
 							  int natts);
@@ -1959,6 +1967,8 @@ BulkloadCopyServer(CopyStmt *copyStatement, char *completionTag,
 	MultiConnection *multiConn = NULL;
 	PGconn *conn = NULL;
 	PGresult *res = NULL;
+	int concurrentDegree = 0;
+	int candidateWorkerNum = 0;
 	int workerConnectionCount = 0;
 	int finishCount = 0;
 	int failCount = 0;
@@ -1967,7 +1977,7 @@ BulkloadCopyServer(CopyStmt *copyStatement, char *completionTag,
 	int efd;
 	int nevents;
 	int sock;
-	int connIdx;
+	int connIdx = 0;
 	struct epoll_event *event = NULL;
 	struct epoll_event *events = NULL;
 
@@ -1999,9 +2009,14 @@ BulkloadCopyServer(CopyStmt *copyStatement, char *completionTag,
 		elog(ERROR, "epoll_create failed");
 	}
 
-	foreach(workerCell, workerNodeList)
+	concurrentDegree = CalculateDynamicConcurrentDegree(list_length(workerNodeList),
+			copyStatement->relation);
+	candidateWorkerNum = concurrentDegree;
+	if (candidateWorkerNum < list_length(workerNodeList)) candidateWorkerNum++;
+
+	for (loopIndex = 0; loopIndex < candidateWorkerNum; loopIndex++)
 	{
-		workerNode = (WorkerNode *) lfirst(workerCell);
+		workerNode = (WorkerNode *) list_nth(workerNodeList, loopIndex);
 		nodeName = workerNode->workerName;
 		nodePort = workerNode->workerPort;
 		multiConn = GetNodeConnection(FOR_DML, nodeName, nodePort);
@@ -2050,6 +2065,8 @@ BulkloadCopyServer(CopyStmt *copyStatement, char *completionTag,
 						 * socket file descriptor successfully to connection list.
 						 */
 						workerConnectionList = lappend(workerConnectionList, conn);
+
+						if (list_length(workerConnectionList) >= concurrentDegree) break;
 					}
 				}
 			}
@@ -2060,6 +2077,12 @@ BulkloadCopyServer(CopyStmt *copyStatement, char *completionTag,
 	{
 		elog(ERROR, "Can't send bulkload copy to any worker");
 	}
+	else if (workerConnectionCount < concurrentDegree)
+	{
+		elog(NOTICE, "concurrent degree %d, expect %d", workerConnectionCount,
+				concurrentDegree);
+	}
+
 
 	/*
 	 * array representing the status of worker connection:
@@ -3087,7 +3110,6 @@ StopZeroMQServer(ZeroMQServer *zeromqServer)
 	}
 }
 
-
 /*
  * RebuildBulkloadCopyStatement adds bulkload server address as PROGRAM's arguments.
  */
@@ -3125,7 +3147,6 @@ MasterRelationId(char *qualifiedName)
 		{
 			elog(ERROR, "could not find relationId for the table %s", qualifiedName);
 		}
-
 		relationId = (Oid) atoi(relationIdString);
 	}
 	else
@@ -3137,6 +3158,137 @@ MasterRelationId(char *qualifiedName)
 	return relationId;
 }
 
+static int32
+MasterShardIntervalCount(RangeVar * relation)
+{
+	Oid relationId = 0;
+	text *relationNameText = NULL;
+	char *relationName = relation->relname;
+	char *schemaName = relation->schemaname;
+	char *qualifiedName = quote_qualified_identifier(schemaName, relationName);
+	int32 shardCount = 0;
+
+	if (masterConnection == NULL)
+	{
+		relationNameText = cstring_to_text(qualifiedName);
+		relationId = ResolveRelationId(relationNameText);
+		shardCount = ShardIntervalCount(relationId);
+	}
+	else
+	{
+		relationId = MasterRelationId(qualifiedName);
+		shardCount = RemoteShardIntervalCount(relationId);
+	}
+	return shardCount;
+}
+
+static int32
+RemoteShardIntervalCount(Oid relationId)
+{
+	int32 shardCount = 0;
+	PGresult *queryResult = NULL;
+
+	StringInfo shardCountCommand =	makeStringInfo();
+	appendStringInfo(shardCountCommand, GET_SHARD_COUNT_QUERY, relationId);
+
+	queryResult = PQexec(masterConnection->pgConn, shardCountCommand->data);
+	if (PQresultStatus(queryResult) == PGRES_TUPLES_OK)
+	{
+		shardCount = atoi(PQgetvalue(queryResult, 0, 0));
+	}
+	else
+	{
+		elog(NOTICE, "could not get shard interval count from master");
+	}
+	PQclear(queryResult);
+	return shardCount;
+}
+
+static int32
+MasterShardReplicationFactor(RangeVar * relation)
+{
+	Oid relationId = 0;
+	text *relationNameText = NULL;
+	char *relationName = relation->relname;
+	char *schemaName = relation->schemaname;
+	char *qualifiedName = quote_qualified_identifier(schemaName, relationName);
+	int32 replicationFactor = 0;
+
+	if (masterConnection == NULL)
+	{
+		relationNameText = cstring_to_text(qualifiedName);
+		relationId = ResolveRelationId(relationNameText);
+		PG_TRY();
+		{
+			replicationFactor = TableShardReplicationFactor(relationId);
+		}
+		PG_CATCH();
+		{
+			replicationFactor = ShardReplicationFactor;
+		}
+		PG_END_TRY();
+	}
+	else
+	{
+		relationId = MasterRelationId(qualifiedName);
+		replicationFactor = RemoteShardReplicationFactor(relationId);
+	}
+	return replicationFactor;
+
+}
+
+static int32
+RemoteShardReplicationFactor(Oid relationId)
+{
+	int32 replicationFactor = 0;
+	PGresult *queryResult = NULL;
+
+	StringInfo replicationFactorCommand =	makeStringInfo();
+	appendStringInfo(replicationFactorCommand, GET_SHARD_REPLICATION_FACTOR_QUERY,
+			relationId);
+
+	queryResult = PQexec(masterConnection->pgConn, replicationFactorCommand->data);
+	if (PQresultStatus(queryResult) == PGRES_TUPLES_OK)
+	{
+		replicationFactor = atoi(PQgetvalue(queryResult, 0, 0));
+	}
+	else
+	{
+		elog(NOTICE, "could not get shard replication factor from master");
+	}
+	PQclear(queryResult);
+	return replicationFactor;
+}
+
+static int32
+CalculateDynamicConcurrentDegree(int32 workerNumber, RangeVar *relation)
+{
+	int32 shardCount = 0;
+	int32 replicationFactor = 0;
+	int32 relationExistWorkerNum = 0;
+	int32 maxConnection = 0;
+	const char *maxConnectionStr = NULL;
+	int32 concurrentDegree = 0;
+
+	shardCount = MasterShardIntervalCount(relation);
+	replicationFactor = MasterShardReplicationFactor(relation);
+	relationExistWorkerNum = shardCount < workerNumber ? shardCount : workerNumber;
+	maxConnectionStr = GetConfigOption("max_connections", true, false);
+	if (maxConnectionStr != NULL) maxConnection = atoi(maxConnectionStr);
+
+	if (shardCount == 0 || replicationFactor == 0)
+	{
+		/* append-distributed table without any shard */
+		concurrentDegree = workerNumber;
+	}
+	else
+	{
+		concurrentDegree =
+			(relationExistWorkerNum * maxConnection) / (shardCount * replicationFactor);
+	}
+	if (concurrentDegree > workerNumber) concurrentDegree = workerNumber;
+	return concurrentDegree;
+}
 
 /*
  * MasterDistributedTableCacheEntry get's metadada from master node and

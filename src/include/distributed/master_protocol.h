@@ -77,6 +77,8 @@
 #define PARTITION_METHOD_QUERY "SELECT part_method FROM master_get_table_metadata('%s');"
 #define ACTIVE_WORKER_NODE_QUERY "SELECT * FROM master_get_active_worker_nodes();"
 #define RELATIONID_QUERY "SELECT logical_relid FROM master_get_table_metadata('%s');"
+#define GET_SHARD_COUNT_QUERY "SELECT master_get_shard_count(%d);"
+#define GET_SHARD_REPLICATION_FACTOR_QUERY "SELECT master_get_shard_replication_factor(%d);"
 
 /* Enumeration that defines the shard placement policy to use while staging */
 typedef enum
@@ -131,6 +133,9 @@ extern Datum master_get_new_placementid(PG_FUNCTION_ARGS);
 extern Datum master_get_local_first_candidate_nodes(PG_FUNCTION_ARGS);
 extern Datum master_get_round_robin_candidate_nodes(PG_FUNCTION_ARGS);
 extern Datum master_get_active_worker_nodes(PG_FUNCTION_ARGS);
+
+extern Datum master_get_shard_count(PG_FUNCTION_ARGS);
+extern Datum master_get_shard_replication_factor(PG_FUNCTION_ARGS);
 
 /* Function declarations to help with data staging and deletion */
 extern Datum master_create_empty_shard(PG_FUNCTION_ARGS);

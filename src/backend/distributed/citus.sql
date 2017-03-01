@@ -194,6 +194,20 @@ COMMENT ON FUNCTION master_create_distributed_table(table_name regclass,
                                                     distribution_method citus.distribution_type)
     IS 'define the table distribution functions';
 
+CREATE FUNCTION master_get_shard_count(oid)
+    RETURNS integer
+    LANGUAGE C STRICT
+    AS 'MODULE_PATHNAME', $$master_get_shard_count$$;
+COMMENT ON FUNCTION master_get_shard_count(oid)
+    IS 'get shard count of table';
+
+CREATE FUNCTION master_get_shard_replication_factor(oid)
+    RETURNS integer
+    LANGUAGE C STRICT
+    AS 'MODULE_PATHNAME', $$master_get_shard_replication_factor$$;
+COMMENT ON FUNCTION master_get_shard_replication_factor(oid)
+    IS 'get shard replication factor of table';
+
 -- define shard creation function for hash-partitioned tables
 CREATE FUNCTION master_create_worker_shards(table_name text, shard_count integer,
                                             replication_factor integer DEFAULT 2)
